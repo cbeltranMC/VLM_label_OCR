@@ -1,0 +1,2 @@
+Transcribe all the text visible on this label exactly as written.
+Display them line by line with their name if existing.

@@ -1,0 +1,65 @@
+services:
+  vllm:
+    build:
+      context: ./vllm
+      args:
+        VLLM_IMAGE: ${VLLM_IMAGE:-vllm/vllm-openai:v0.29.0-cu129}
+    command:
+      - ${MODEL_ID:-Qwen/Qwen3-VL-2B-Instruct}
+      - --host=0.0.0.0
+      - --port=8000
+      - --max-model-len=${MAX_MODEL_LEN:-8192}
+      - --gpu-memory-utilization=${GPU_MEMORY_UTILIZATION:-0.85}
+      - --limit-mm-per-prompt={"image":1,"video":0}
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+      # Skip the image's "cuda>=X" driver check; CUDA 12.x images run on older
+      # 12.x drivers (>= 525) through minor-version compatibility.
+      NVIDIA_DISABLE_REQUIRE: ${NVIDIA_DISABLE_REQUIRE:-1}
+      # FlashInfer's sampling kernels need a newer driver ("device kernel image is
+      # invalid" on CUDA 12.2 drivers); use vLLM's PyTorch sampler instead.
+      VLLM_USE_FLASHINFER_SAMPLER: ${VLLM_USE_FLASHINFER_SAMPLER:-0}
+    volumes:
+      - ${HF_CACHE_DIR:-~/.cache/huggingface}:/root/.cache/huggingface
+    ports:
+      - "${VLLM_PORT:-8000}:8000"
+    ipc: host
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      # The first start downloads the model, so allow plenty of time.
+      start_period: 30m
+    restart: unless-stopped
+
+  client:
+    build: ./client
+    # Run as the host user so output files are not owned by root.
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    # Interactive, on demand: `docker compose run --rm client` opens a shell and
+    # the container is removed on exit.
+    command: bash
+    depends_on:
+      - vllm
+    environment:
+      VLLM_URL: http://vllm:8000/v1
+      # The host user has no home directory inside the container.
+      HOME: /tmp
+      MAX_IMAGE_PIXELS: ${MAX_IMAGE_PIXELS:-3000000}
+      MAX_TOKENS: ${MAX_TOKENS:-1024}
+      TEMPERATURE: ${TEMPERATURE:-0.0}
+      CONCURRENCY: ${CONCURRENCY:-8}
+    volumes:
+      # Live-mount the scripts so edits on the host apply without rebuilding.
+      - ./client:/app
+      - ${INPUT_DIR:-./input}:/data/input:ro
+      - ${OUTPUT_DIR:-./output}:/data/output
+      - ${PROMPT_FILE:-./prompts/prompt.txt}:/data/prompt.txt:ro
