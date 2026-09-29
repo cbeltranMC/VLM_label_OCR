@@ -78,11 +78,13 @@ another file.
 
 ## Output
 
-Each run writes two files to `output/`:
+Each run writes three files to `output/`:
 
 - `results_<timestamp>.jsonl`: one JSON object per image, written as each image
   finishes, so partial results survive a crash
 - `results_<timestamp>.csv`: the same rows sorted by filename
+- `summary_<timestamp>.json`: speed and GPU stats for the whole run (see
+  [Comparing models](#comparing-models))
 
 | field | meaning |
 |---|---|
@@ -90,9 +92,45 @@ Each run writes two files to `output/`:
 | `output` | model response |
 | `error` | error message if this image failed, otherwise empty |
 | `seconds` | request latency |
+| `ttft_seconds` | time to first token (image preprocessing + vision encoder + prefill) |
+| `decode_tokens_per_s` | generation speed after the first token |
 | `prompt_tokens` / `completion_tokens` | token usage |
 
 The client exits with a non-zero status if any image failed.
+
+## Comparing models
+
+Every run saves a `summary_<timestamp>.json` file. To put all runs side by side
+(this also writes `output/comparison.csv`):
+
+```bash
+python compare_runs.py          # inside the client container
+```
+
+| summary field | meaning |
+|---|---|
+| `images_per_s`, `output_tokens_per_s` | throughput over the whole run |
+| `latency_s_*`, `ttft_s_*`, `decode_tps_*` | per-image mean / p50 / p95 |
+| `gpu_mem_baseline_mib` / `gpu_mem_peak_mib` | GPU memory used before / at most during the run (whole device) |
+| `gpu_util_mean_pct`, `gpu_power_mean_w`, `gpu_energy_j` | GPU load and energy during the run |
+| `kv_cache_peak_tokens` / `kv_cache_capacity_tokens` | KV cache the run actually needed / what vLLM allocated |
+
+Use `--tag` to label a run (`python run_inference.py --tag "eager, kv 1G"`).
+
+**GPU memory is only comparable with a fixed KV cache.** By default vLLM reserves
+`GPU_MEMORY_UTILIZATION` of the card up front and fills the rest with KV cache,
+so every model shows about the same memory. To see what a model really needs, set
+the KV cache size explicitly and restart the server:
+
+```bash
+VLLM_EXTRA_ARGS="--kv-cache-memory-bytes=1G --enforce-eager" docker compose up -d vllm
+```
+
+Then `gpu_mem_baseline_mib` is roughly weights + profiled activations + 1 GiB of KV
+cache. vLLM's startup log shows the breakdown (`docker compose logs vllm | grep -E
+"Model loading took|Actual usage"`). `--enforce-eager` skips CUDA graphs: it saves
+memory (about 1 GiB here) but decodes slower. Keep `MAX_MODEL_LEN`,
+`MAX_IMAGE_PIXELS`, `CONCURRENCY` and the input images the same across models.
 
 ## Configuration
 
@@ -107,11 +145,13 @@ All settings live in `.env` (see [`.env.example`](.env.example) for the defaults
 | `VLLM_PORT` | host port for the API (`http://localhost:8000/v1`) |
 | `MAX_MODEL_LEN` | max context (image + prompt + output tokens) |
 | `GPU_MEMORY_UTILIZATION` | share of VRAM vLLM may use |
+| `VLLM_EXTRA_ARGS` | extra `vllm serve` flags, e.g. `--kv-cache-memory-bytes=1G --enforce-eager` |
 | `INPUT_DIR` / `OUTPUT_DIR` | host folders for images and results |
 | `PROMPT_FILE` | prompt text file |
 | `MAX_IMAGE_PIXELS` | images are downscaled to at most this many pixels (~1 token per 32×32 px for Qwen3-VL) |
 | `MAX_TOKENS` / `TEMPERATURE` | generation settings |
 | `CONCURRENCY` | parallel requests (vLLM batches them on the GPU) |
+| `GPU_INDEX` | GPU the client monitors for the run summary |
 | `HOST_UID` / `HOST_GID` | owner of the output files |
 
 Supported image types: jpg, jpeg, png, bmp, tif, tiff, webp. Images are rotated

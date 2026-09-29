@@ -4,13 +4,15 @@ services:
       context: ./vllm
       args:
         VLLM_IMAGE: ${VLLM_IMAGE:-vllm/vllm-openai:v0.29.0-cu129}
-    command:
-      - ${MODEL_ID:-Qwen/Qwen3-VL-2B-Instruct}
-      - --host=0.0.0.0
-      - --port=8000
-      - --max-model-len=${MAX_MODEL_LEN:-8192}
-      - --gpu-memory-utilization=${GPU_MEMORY_UTILIZATION:-0.85}
-      - --limit-mm-per-prompt={"image":1,"video":0}
+    # A string (not a list) so VLLM_EXTRA_ARGS can add any number of flags.
+    command: >-
+      ${MODEL_ID:-Qwen/Qwen3-VL-2B-Instruct}
+      --host=0.0.0.0
+      --port=8000
+      --max-model-len=${MAX_MODEL_LEN:-8192}
+      --gpu-memory-utilization=${GPU_MEMORY_UTILIZATION:-0.85}
+      --limit-mm-per-prompt='{"image":1,"video":0}'
+      ${VLLM_EXTRA_ARGS:-}
     environment:
       HF_TOKEN: ${HF_TOKEN:-}
       # Skip the image's "cuda>=X" driver check; CUDA 12.x images run on older
@@ -57,6 +59,16 @@ services:
       MAX_TOKENS: ${MAX_TOKENS:-1024}
       TEMPERATURE: ${TEMPERATURE:-0.0}
       CONCURRENCY: ${CONCURRENCY:-8}
+      GPU_INDEX: ${GPU_INDEX:-0}
+    # "utility" only: lets the client read GPU stats through NVML (for the run
+    # summary) without being able to run CUDA work.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [utility]
     volumes:
       # Live-mount the scripts so edits on the host apply without rebuilding.
       - ./client:/app

@@ -7,3 +7,4 @@ FROM ${VLLM_IMAGE}
 # "Error 804: forward compatibility was attempted on non supported HW".
 # Removing them makes the container use the host driver directly.
 RUN rm -rf /usr/local/cuda*/compat
+RUN pip install --no-cache-dir num2words # for smolvlm2-2.2B-instruct
